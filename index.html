@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>YouTube Embed Playlist Player</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #f4f7fb;
+      color: #222;
+    }
+    .container { max-width: 1100px; margin: 30px auto; padding: 20px; }
+    h1 { margin: 0 0 10px; font-size: 28px; }
+    .subtitle { font-size: 14px; color: #555; margin-bottom: 20px; line-height: 1.6; }
+    .card { background: #fff; border-radius: 14px; padding: 18px; box-shadow: 0 8px 24px rgba(0,0,0,0.08); margin-bottom: 20px; }
+    textarea { width: 100%; min-height: 110px; resize: vertical; border: 1px solid #d5dce5; border-radius: 10px; padding: 12px; font-size: 14px; outline: none; }
+    textarea:focus { border-color: #2d7ff9; }
+    .btn-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+    .btn { border: none; border-radius: 10px; padding: 10px 16px; font-size: 14px; font-weight: 500; cursor: pointer; transition: 0.2s ease; }
+    .btn:hover { transform: translateY(-1px); }
+    .blue { background: #2d7ff9; color: #fff; }
+    .dark { background: #222; color: #fff; }
+    .green { background: #16a34a; color: #fff; }
+    .red { background: #e74c3c; color: #fff; }
+    .small { padding: 7px 12px; font-size: 13px; }
+    .status { margin-top: 12px; font-weight: bold; color: #333; font-size: 14px; }
+    .player-box { position: relative; width: 100%; padding-top: 56.25%; background: #000; border-radius: 14px; overflow: hidden; }
+    #player { position: absolute; inset: 0; width: 100%; height: 100%; }
+    #player iframe { width: 100% !important; height: 100% !important; }
+    .playlist { list-style: none; padding: 0; margin: 0; }
+    .item { display: flex; gap: 14px; align-items: flex-start; padding: 12px; border: 1px solid #e1e7ef; border-radius: 12px; margin-bottom: 12px; background: #fafcff; cursor: pointer; transition: 0.2s ease; }
+    .item:hover { background: #f2f7ff; border-color: #bfd4ff; }
+    .item.active { background: #edf5ff; border: 2px solid #2d7ff9; padding: 11px; }
+    .thumb { width: 160px; min-width: 160px; height: 90px; border-radius: 10px; overflow: hidden; background: #ddd; }
+    .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .body { flex: 1; min-width: 0; }
+    .title { font-weight: bold; margin-bottom: 8px; font-size: 15px; }
+    .now { color: #2d7ff9; font-size: 13px; margin-left: 6px; }
+    .line { font-size: 13px; color: #555; margin-bottom: 6px; word-break: break-word; line-height: 1.5; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .empty { padding: 20px; text-align: center; color: #666; border: 1px dashed #cad4e0; border-radius: 12px; background: #fff; }
+    .note { margin-top: 12px; font-size: 13px; color: #666; line-height: 1.5; }
+    @media (max-width: 760px) {
+      .item { flex-direction: column; }
+      .thumb { width: 100%; height: auto; aspect-ratio: 16/9; }
+      .actions { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>YouTube Embed Playlist Player</h1>
+    <div class="subtitle">
+      Paste normal YouTube links below. They will be stored and played one by one. The player now includes controls and supports autoplay after the first click.
+    </div>
+
+    <div class="card">
+      <textarea id="urlInput" placeholder="Paste YouTube links here, one per line
+
+Examples:
+https://www.youtube.com/watch?v=dQw4w9WgXcQ
+https://youtu.be/M5QY2_8704o
+https://www.youtube.com/shorts/3iM_06QeZi8"></textarea>
+
+      <div class="btn-row">
+        <button class="btn blue" id="addBtn">Add Videos</button>
+        <button class="btn dark" id="playFirstBtn">Play From First</button>
+        <button class="btn green" id="nextBtn">Next Video</button>
+        <button class="btn red" id="clearBtn">Clear All</button>
+      </div>
+
+      <div class="status" id="status">Ready. Add YouTube links to begin.</div>
+    </div>
+
+    <div class="card">
+      <div class="player-box">
+        <div id="player"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0;">Saved Playlist</h2>
+      <ul id="playlist" class="playlist"></ul>
+    </div>
+  </div>
+
+  <script src="https://www.youtube.com/iframe_api"></script>
+  <script>
+    const STORAGE_KEY = "youtube_embed_playlist_storage_v3";
+
+    let playlist = [];
+    let player = null;
+    let playerReady = false;
+    let currentIndex = -1;
+    let pendingPlayIndex = null;
+
+    function setStatus(text) { document.getElementById("status").textContent = text; }
+    function escapeHtml(text) {
+      return String(text).replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" }[ch]));
+    }
+    function extractYouTubeVideoId(input) {
+      if (!input) return null;
+      let text = String(input).trim();
+      if (!text) return null;
+      if (/^[A-Za-z0-9_-]{11}$/.test(text)) return text;
+      if (!/^https?:\/\//i.test(text) && /^(www\.|m\.|music\.|youtube\.com\/|youtu\.be\/)/i.test(text)) text = "https://" + text;
+      try {
+        const url = new URL(text);
+        const host = url.hostname.replace(/^www\./, "");
+        if (host === "youtu.be") {
+          const id = url.pathname.split("/").filter(Boolean)[0];
+          if (/^[A-Za-z0-9_-]{11}$/.test(id)) return id;
+        }
+        if (host.includes("youtube.com") || host === "m.youtube.com" || host === "music.youtube.com") {
+          if (url.pathname === "/watch") {
+            const id = url.searchParams.get("v");
+            if (/^[A-Za-z0-9_-]{11}$/.test(id)) return id;
+          }
+          const parts = url.pathname.split("/").filter(Boolean);
+          if (parts.length >= 2 && ["embed", "shorts", "live", "v"].includes(parts[0])) {
+            const id = parts[1];
+            if (/^[A-Za-z0-9_-]{11}$/.test(id)) return id;
+          }
+        }
+      } catch (e) {}
+      const patterns = [/[?&]v=([A-Za-z0-9_-]{11})/, /youtu\.be\/([A-Za-z0-9_-]{11})/, /embed\/([A-Za-z0-9_-]{11})/, /shorts\/([A-Za-z0-9_-]{11})/, /live\/([A-Za-z0-9_-]{11})/, /\/v\/([A-Za-z0-9_-]{11})/];
+      for (const pattern of patterns) {
+        const match = text.match(pattern);
+        if (match) return match[1];
+      }
+      return null;
+    }
+    function makeEmbedUrl(videoId) { return `https://www.youtube.com/embed/${videoId}?enablejsapi=1`; }
+    function normalizeVideo(rawUrl) {
+      const videoId = extractYouTubeVideoId(rawUrl);
+      if (!videoId) return null;
+      return {
+        videoId,
+        originalUrl: String(rawUrl).trim(),
+        embedUrl: makeEmbedUrl(videoId),
+        watchUrl: `https://www.youtube.com/watch?v=${videoId}`,
+        thumbnail: `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`
+      };
+    }
+    function savePlaylist() { localStorage.setItem(STORAGE_KEY, JSON.stringify(playlist)); }
+    function loadPlaylist() {
+      let saved = [];
+      try { saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); } catch (e) { saved = []; }
+      const normalized = [];
+      if (Array.isArray(saved)) {
+        saved.forEach(item => {
+          let video = null;
+          if (typeof item === "string") video = normalizeVideo(item);
+          else if (item && typeof item === "object") video = normalizeVideo(item.originalUrl || item.embedUrl || item.watchUrl || item.videoId);
+          if (video) normalized.push(video);
+        });
+      }
+      playlist = normalized;
+      savePlaylist();
+    }
+    function renderPlaylist() {
+      const list = document.getElementById("playlist");
+      list.innerHTML = "";
+      if (!playlist.length) {
+        list.innerHTML = `<li class="empty">No videos saved yet.</li>`;
+        return;
+      }
+      playlist.forEach((video, index) => {
+        const li = document.createElement("li");
+        li.className = "item" + (index === currentIndex ? " active" : "");
+        li.innerHTML = `
+          <div class="thumb"><img src="${escapeHtml(video.thumbnail)}" alt="Thumbnail"></div>
+          <div class="body">
+            <div class="title">Video ${index + 1} ${index === currentIndex ? '<span class="now">(Now Playing)</span>' : ''}</div>
+            <div class="line"><b>Original:</b> ${escapeHtml(video.originalUrl)}</div>
+            <div class="actions">
+              <button class="btn blue small play-btn" data-index="${index}">Play</button>
+              <button class="btn red small del-btn" data-index="${index}">Delete</button>
+            </div>
+          </div>`;
+        li.addEventListener('click', (e) => {
+          if (e.target.classList.contains('play-btn') || e.target.classList.contains('del-btn')) return;
+          playVideoAt(index);
+        });
+        list.appendChild(li);
+      });
+    }
+    function addVideos() {
+      const input = document.getElementById("urlInput");
+      const lines = input.value.split(/\n|,/).map(v => v.trim()).filter(Boolean);
+      if (!lines.length) { alert("Please paste at least one YouTube link."); return; }
+      const existingIds = new Set(playlist.map(v => v.videoId));
+      let added = 0, duplicates = 0, invalid = [];
+      lines.forEach(link => {
+        const video = normalizeVideo(link);
+        if (!video) { invalid.push(link); return; }
+        if (existingIds.has(video.videoId)) { duplicates++; return; }
+        existingIds.add(video.videoId);
+        playlist.push(video);
+        added++;
+      });
+      savePlaylist();
+      renderPlaylist();
+      if (added > 0) setStatus(`${added} video(s) added and saved.`);
+      if (duplicates > 0) alert(`${duplicates} duplicate video(s) were skipped.`);
+      if (invalid.length > 0) alert(`These links were invalid:\n\n${invalid.join("\n")}`);
+      input.value = "";
+      if (playerReady && playlist.length && currentIndex === -1) { player.cueVideoById(playlist[0].videoId); }
+    }
+    function playVideoAt(index) {
+      if (!playlist.length) { alert("Please add videos first."); return; }
+      if (index < 0 || index >= playlist.length) return;
+      currentIndex = index;
+      renderPlaylist();
+      setStatus(`Playing video ${index + 1} of ${playlist.length}`);
+      if (playerReady && player) { player.loadVideoById(playlist[index].videoId); } 
+      else { pendingPlayIndex = index; }
+    }
+    function playNextVideo() {
+      if (!playlist.length) return;
+      if (currentIndex + 1 < playlist.length) playVideoAt(currentIndex + 1);
+      else setStatus("Playlist finished.");
+    }
+    function deleteVideo(index) {
+      if (index < 0 || index >= playlist.length) return;
+      const wasCurrent = index === currentIndex;
+      playlist.splice(index, 1);
+      savePlaylist();
+      if (!playlist.length) {
+        currentIndex = -1;
+        renderPlaylist();
+        setStatus("Playlist is empty.");
+        if (playerReady && player) player.stopVideo();
+        return;
+      }
+      if (index < currentIndex) currentIndex--;
+      renderPlaylist();
+      if (wasCurrent) {
+        const newIndex = Math.min(index, playlist.length - 1);
+        currentIndex = -1; // Force re-evaluation
+        playVideoAt(newIndex);
+      } else {
+        setStatus("Video deleted.");
+      }
+    }
+    function clearAllVideos() {
+      if (!playlist.length) return;
+      if (!confirm("Do you want to remove all saved videos?")) return;
+      playlist = [];
+      currentIndex = -1;
+      savePlaylist();
+      renderPlaylist();
+      setStatus("All videos cleared.");
+      if (playerReady && player) player.stopVideo();
+    }
+    
+    // --- YouTube Player API Setup ---
+    window.onYouTubeIframeAPIReady = function() {
+      player = new YT.Player("player", {
+        height: "390",
+        width: "640",
+        playerVars: {
+          'playsinline': 1,
+          'rel': 0,
+          'modestbranding': 1,
+          // --- KEY FIXES ---
+          'controls': 1, // 1. Show player controls (play/pause, volume)
+          'autoplay': 1  // 2. Enable autoplay for sequential videos
+        },
+        events: {
+          'onReady': onPlayerReady,
+          'onStateChange': onPlayerStateChange
+        }
+      });
+    };
+    function onPlayerReady(event) {
+      playerReady = true;
+      if (pendingPlayIndex !== null) {
+        playVideoAt(pendingPlayIndex);
+        pendingPlayIndex = null;
+        return;
+      }
+      if (playlist.length) {
+        event.target.cueVideoById(playlist[0].videoId);
+        setStatus("Saved playlist loaded. Click Play or select a video.");
+      } else {
+        setStatus("Ready. Add YouTube links to begin.");
+      }
+    }
+    function onPlayerStateChange(event) {
+      if (event.data === YT.PlayerState.ENDED) {
+        playNextVideo();
+      }
+    }
+
+    // --- Event Listeners ---
+    document.getElementById("addBtn").addEventListener("click", addVideos);
+    document.getElementById("playFirstBtn").addEventListener("click", () => playVideoAt(0));
+    document.getElementById("nextBtn").addEventListener("click", playNextVideo);
+    document.getElementById("clearBtn").addEventListener("click", clearAllVideos);
+    document.getElementById('playlist').addEventListener('click', function (e) {
+      if (e.target.matches('.play-btn')) {
+        playVideoAt(parseInt(e.target.dataset.index, 10));
+      } else if (e.target.matches('.del-btn')) {
+        deleteVideo(parseInt(e.target.dataset.index, 10));
+      }
+    });
+
+    // --- Initial Load ---
+    loadPlaylist();
+    renderPlaylist();
+    if (playlist.length) {
+      setStatus("Saved playlist loaded from localStorage.");
+    }
+  </script>
+</body>
+</html>
